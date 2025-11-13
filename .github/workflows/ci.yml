@@ -1,0 +1,133 @@
+name: CI/CD Pipeline - COVID-19 Data Analysis System
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.10"
+  NODE_VERSION: "18"
+
+jobs:
+  # Python Tests (ETL + API Integration)
+  python-tests:
+    name: Python Tests (ETL & API)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Run ETL Tests
+        run: python -m pytest tests/test_etl.py -v --tb=short
+      
+      - name: Run API Tests
+        run: python -m pytest tests/test_api.py -v --tb=short
+      
+      - name: Run all tests with coverage
+        run: python -m pytest tests/ -v --tb=short --cov --cov-report=term-missing
+
+  # ETL Data Validation
+  etl-validation:
+    name: ETL Pipeline Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Run ETL Pipeline
+        run: python etl/run_etl.py
+      
+      - name: Validate ETL Output
+        run: |
+          python -c "
+          import pandas as pd
+          from pathlib import Path
+          
+          output_file = Path('output/timeseries.parquet')
+          if not output_file.exists():
+              raise FileNotFoundError('Parquet file not created')
+          
+          df = pd.read_parquet(output_file)
+          
+          # Validate schema
+          required_cols = ['iso3', 'country', 'date', 'confirmed_cases', 'deaths']
+          missing = set(required_cols) - set(df.columns)
+          if missing:
+              raise ValueError(f'Missing columns: {missing}')
+          
+          # Validate data
+          assert len(df) > 0, 'No records in output'
+          assert df['iso3'].nunique() > 50, f'Too few countries: {df[\"iso3\"].nunique()}'
+          assert df['date'].nunique() > 1000, f'Too few dates: {df[\"date\"].nunique()}'
+          
+          print('ETL Validation Passed')
+          "
+
+  # Frontend Build & Tests
+  frontend-build:
+    name: Frontend Build & Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm ci
+      
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: frontend-build
+          path: frontend/dist/
+
+  # Final Status Report
+  status-report:
+    name: Build Status Report
+    runs-on: ubuntu-latest
+    needs: [python-tests, etl-validation, frontend-build]
+    if: always()
+    steps:
+      - name: Report Status
+        run: |
+          echo "## COVID-19 System Build Status"
+          echo "| Component | Status |"
+          echo "|-----------|--------|"
+          echo "| Python Tests | ${{ needs.python-tests.result }} |"
+          echo "| ETL Validation | ${{ needs.etl-validation.result }} |"
+          echo "| Frontend Build | ${{ needs.frontend-build.result }} |"
