@@ -1,60 +1,52 @@
-# --- Backend/ML/ETL build stage ---
-FROM python:3.11-slim AS backend
+# Use a slim Python image for the backend & final image
+FROM python:3.11-slim
 
+# set working dir
 WORKDIR /app
 
-# Install dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential curl nodejs npm nginx \
-    && rm -rf /var/lib/apt/lists/*
+# ---------- Install system packages (nginx + build tools for Python deps) ----------
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential curl nginx ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 
-# Set environment variables
+# ---------- Python env ----------
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Install Python dependencies
-COPY requirements.txt .
+# ---------- Install Python dependencies ----------
+# copy only requirements first for Docker cache efficiency
+COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend code
+# ---------- Copy backend code ----------
 COPY etl/ ./etl/
 COPY services/api/ ./services/api/
-COPY entrypoint.sh ./
+# copy entrypoint (make sure it exists and is executable)
+COPY entrypoint.sh ./entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
+
+# create output dir used by ETL if needed
 RUN mkdir -p /app/etl/output
 
-# --- Frontend build stage ---
-WORKDIR /app/frontend
-COPY frontend/package*.json ./
-RUN npm ci
-COPY frontend/ ./
-RUN npm run build
+# ---------- Copy already-built frontend (must exist locally) ----------
+# This copies frontend/dist from the build context into nginx html dir
+COPY frontend/dist /usr/share/nginx/html
 
-# --- Final image ---
-FROM python:3.11-slim
-
-WORKDIR /app
-
-# Install NGINX
-RUN apt-get update && apt-get install -y --no-install-recommends nginx && rm -rf /var/lib/apt/lists/*
-
-# Add a non-root user
-RUN useradd --create-home appuser
-USER appuser
-
-# Copy backend/ML/ETL from backend stage
-COPY --from=backend /app /app
-
-# Copy built frontend from backend stage
-COPY --from=backend /app/frontend/dist /usr/share/nginx/html
-
-# Copy nginx config
+# Copy nginx config if you have a custom one (optional)
+# If you don't have frontend/nginx.conf, remove this line
 COPY frontend/nginx.conf /etc/nginx/nginx.conf
 
-# Ensure correct permissions
-RUN chown -R appuser:appuser /app /usr/share/nginx/html
+# ---------- Create non-root user and fix permissions ----------
+RUN useradd --create-home appuser \
+ && chown -R appuser:appuser /app /usr/share/nginx/html
 
+USER appuser
+
+# ---------- Expose ports ----------
+# 8000 for your Python app (if used), 80 for nginx static site
 EXPOSE 8000 80
 
-# Use entrypoint script for flexibility
+# ---------- Entrypoint ----------
+# entrypoint should start nginx and your API (adjust script accordingly)
 ENTRYPOINT ["/app/entrypoint.sh"]
