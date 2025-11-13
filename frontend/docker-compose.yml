@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./etl/output:/app/etl/output
+    depends_on:
+      - etl-init
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+    environment:
+      - REACT_APP_API_URL=http://api:8000/api/v1
+
+  etl-init:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: python etl/run_etl.py
+    volumes:
+      - ./raw:/app/raw:ro
+      - ./etl/output:/app/etl/output
+    profiles:
+      - etl
